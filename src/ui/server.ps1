@@ -803,7 +803,7 @@ try {
         # Browsers enforce CORS preflight for custom headers, blocking cross-origin attacks.
         if ($method -in @('POST', 'PUT', 'DELETE')) {
             $csrfHeader = $request.Headers['X-Dotbot-Request']
-            $isControlPlaneRuntimeCall = ($url -like '/api/fleet/runtimes/*' -and (Test-FleetControlPlaneAuth -Request $request))
+            $isControlPlaneRuntimeCall = (($url -like '/api/fleet/runtimes/*' -or $url -in @('/api/fleet/register', '/api/fleet/heartbeat')) -and (Test-FleetControlPlaneAuth -Request $request))
             if ($csrfHeader -ne '1' -and -not $isControlPlaneRuntimeCall) {
                 $statusCode = 403
                 $contentType = "application/json; charset=utf-8"
@@ -873,6 +873,28 @@ try {
                     break
                 }
 
+                # Bare alias for "/api/fleet/runtimes/register".
+                "/api/fleet/register" {
+                    $contentType = "application/json; charset=utf-8"
+                    if ($method -ne "POST") {
+                        $statusCode = 405
+                        $content = @{ success = $false; error = "Method not allowed" } | ConvertTo-Json -Compress
+                        break
+                    }
+                    if (-not (Test-FleetControlPlaneAuth -Request $request)) {
+                        $statusCode = 401
+                        $content = @{ success = $false; error = "Invalid mothership API key" } | ConvertTo-Json -Compress
+                        break
+                    }
+                    $reader = New-Object System.IO.StreamReader($request.InputStream)
+                    $body = $reader.ReadToEnd() | ConvertFrom-Json
+                    $reader.Close()
+                    $result = Register-FleetRuntime -Body $body
+                    if ($result -is [hashtable] -and $result.ContainsKey('_statusCode')) { $statusCode = $result._statusCode; $result.Remove('_statusCode') }
+                    $content = $result | ConvertTo-Json -Depth 10 -Compress
+                    break
+                }
+
                 { $_ -match '^/api/fleet/runtimes/([^/]+)/heartbeat$' } {
                     $contentType = "application/json; charset=utf-8"
                     if ($method -ne "POST") {
@@ -889,6 +911,34 @@ try {
                     $reader = New-Object System.IO.StreamReader($request.InputStream)
                     $body = $reader.ReadToEnd() | ConvertFrom-Json
                     $reader.Close()
+                    $result = Update-FleetRuntimeHeartbeat -RuntimeId $runtimeId -Body $body
+                    if ($result -is [hashtable] -and $result.ContainsKey('_statusCode')) { $statusCode = $result._statusCode; $result.Remove('_statusCode') }
+                    $content = $result | ConvertTo-Json -Depth 20 -Compress
+                    break
+                }
+
+                # Bare alias for "/api/fleet/runtimes/{id}/heartbeat".
+                "/api/fleet/heartbeat" {
+                    $contentType = "application/json; charset=utf-8"
+                    if ($method -ne "POST") {
+                        $statusCode = 405
+                        $content = @{ success = $false; error = "Method not allowed" } | ConvertTo-Json -Compress
+                        break
+                    }
+                    if (-not (Test-FleetControlPlaneAuth -Request $request)) {
+                        $statusCode = 401
+                        $content = @{ success = $false; error = "Invalid mothership API key" } | ConvertTo-Json -Compress
+                        break
+                    }
+                    $reader = New-Object System.IO.StreamReader($request.InputStream)
+                    $body = $reader.ReadToEnd() | ConvertFrom-Json
+                    $reader.Close()
+                    $runtimeId = if ($body.PSObject.Properties['runtime_id']) { [string]$body.runtime_id } else { '' }
+                    if (-not $runtimeId) {
+                        $statusCode = 400
+                        $content = @{ success = $false; error = "runtime_id is required" } | ConvertTo-Json -Compress
+                        break
+                    }
                     $result = Update-FleetRuntimeHeartbeat -RuntimeId $runtimeId -Body $body
                     if ($result -is [hashtable] -and $result.ContainsKey('_statusCode')) { $statusCode = $result._statusCode; $result.Remove('_statusCode') }
                     $content = $result | ConvertTo-Json -Depth 20 -Compress
